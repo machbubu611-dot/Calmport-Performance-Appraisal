@@ -1,0 +1,1475 @@
+import React, { useState, useEffect, useCallback } from "react";
+import * as XLSX from "xlsx";
+
+/* ============ 儲存層 (Claude Artifact 雲端共享儲存) ============ */
+const SGET = async (k) => { try { const r = await window.storage.get(k, true); return r ? JSON.parse(r.value) : null; } catch (e) { return null; } };
+const SSET = async (k, v) => { try { const r = await window.storage.set(k, JSON.stringify(v), true); return !!r; } catch (e) { console.error("save fail", k, e); return false; } };
+const SDEL = async (k) => { try { await window.storage.delete(k, true); return true; } catch (e) { return false; } };
+const SLIST = async (p) => { try { const r = await window.storage.list(p, true); return r ? r.keys : []; } catch (e) { return []; } };
+
+/* ============ 系統常數 ============ */
+const DEFAULT_PASSWORDS = { superadmin: "admin", manager: "666666", storeManager: "888888", safetyUnlock: "999999", hr: "hr" };
+
+const generateMonths = () => {
+  const months = []; const start = new Date(2026, 0); const today = new Date();
+  const end = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  let cur = new Date(start);
+  while (cur <= end) { months.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`); cur.setMonth(cur.getMonth() + 1); }
+  return months;
+};
+const MONTHS = generateMonths();
+const DEFAULT_MONTH = (() => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`; })();
+
+const DEFAULT_ROSTERS = {
+  nursing: {
+    "台北仁愛": [{ name: "楊馥華", active: true }, { name: "林妤辰", active: true }, { name: "劉玳均", active: true }],
+    "桃園中正": [{ name: "林玉美", active: true }, { name: "張沛璇", active: true }, { name: "江謝宜臻", active: true }, { name: "張思晴", active: true }],
+    "新竹光明": [{ name: "楊琇婷", active: true }, { name: "林慧珊", active: true }],
+    "台中向上": [{ name: "吳羿葶", active: true }, { name: "李宛軒", active: true }, { name: "鄭瑞屏", active: true }, { name: "黃珮綺", active: true }],
+    "台中崇德": [{ name: "吳孟樵", active: true }, { name: "姜宜君", active: true }, { name: "陳姵妘", active: true }, { name: "陳晏涵", active: true }],
+    "高雄巨蛋": [{ name: "林宣羽", active: true }, { name: "盧巧嵐", active: true }, { name: "王子芸", active: true }]
+  },
+  counter: {
+    "美加": {
+      "台北仁愛": { evaluators: [{ title: "店經理", name: "張晴雅", active: true }, { title: "行政主任", name: "何玟", active: true }], evaluatees: [{ name: "楊書庭", active: true }, { name: "陳星霓", active: true }], director: { name: "何玟", active: true } },
+      "桃園中正": { evaluators: [{ title: "店經理", name: "鍾欣妍", active: true }, { title: "護理長", name: "劉姮麗", active: true }], evaluatees: [{ name: "林怡婷", active: true }, { name: "陳韻如", active: true }, { name: "汪芸安", active: true }], director: { name: "", active: false } },
+      "台中向上": { evaluators: [{ title: "店經理", name: "賴麗妃", active: true }, { title: "行政主任", name: "王鐿諠", active: true }], evaluatees: [{ name: "江宜潔", active: true }], director: { name: "王鐿諠", active: true } },
+      "高雄巨蛋": { evaluators: [{ title: "店經理", name: "陳書含", active: true }, { title: "店副理", name: "李淑樺", active: true }, { title: "護理長", name: "李慧珊", active: true }], evaluatees: [{ name: "邱于榛", active: true }, { name: "黃品蓁", active: true }, { name: "郭文蘭", active: true }], director: { name: "", active: false } },
+      "新竹光明": { evaluators: [{ title: "店副理", name: "謝曉瑋", active: true }], evaluatees: [{ name: "邱淑娟", active: true }, { name: "黃婉琁", active: true }], director: { name: "", active: false } },
+      "台中崇德": { evaluators: [{ title: "店副理", name: "劉士瑄", active: true }, { title: "店副理", name: "謝宛妤", active: true }], evaluatees: [{ name: "吳佳穎", active: true }, { name: "李昀潔", active: true }, { name: "洪嘉悌", active: true }], director: { name: "", active: false } }
+    },
+    "康博": {
+      "台北大安": { evaluators: [{ title: "店經理", name: "曾怡君", active: true }, { title: "護理長", name: "林亞萱", active: true }, { title: "客服主任", name: "林于倫", active: true }], evaluatees: [{ name: "鄔佩如", active: true }, { name: "李君宜", active: true }], director: { name: "林于倫", active: true } },
+      "桃園藝文": { evaluators: [{ title: "店經理", name: "蔡承達", active: true }], evaluatees: [{ name: "李婉慈", active: true }], director: { name: "", active: false } },
+      "台中惠文": { evaluators: [{ title: "店經理", name: "許妍菲", active: true }, { title: "客服主任", name: "詹雅筑", active: true }], evaluatees: [{ name: "林書霈", active: true }, { name: "謝旻潔", active: true }, { name: "張以昕", active: true }], director: { name: "詹雅筑", active: true } },
+      "新竹竹北": { evaluators: [{ title: "店經理", name: "李印柔", active: true }, { title: "店副理", name: "高綺霙", active: true }, { title: "客服主任", name: "徐玟沛", active: true }], evaluatees: [{ name: "曾鈺婷", active: true }, { name: "蔡沛翎", active: true }, { name: "林佳萱", active: true }], director: { name: "徐玟沛", active: true } },
+      "台南安平": { evaluators: [{ title: "店經理", name: "陳盈羽", active: true }, { title: "客服主任", name: "廖妏晏", active: true }], evaluatees: [{ name: "郭文伃", active: true }, { name: "張惟婷", active: true }], director: { name: "廖妏晏", active: true } },
+      "台中北屯": { evaluators: [{ title: "主管", name: "主管", active: true }], evaluatees: [{ name: "張芸溱", active: true }, { name: "黃資雅", active: true }], director: { name: "", active: false } }
+    }
+  }
+};
+
+const NURSING_BRANCHES = ["台北仁愛", "桃園中正", "新竹光明", "台中向上", "台中崇德", "高雄巨蛋"];
+const COUNTER_BRANDS = ["美加", "康博"];
+const COUNTER_BRANCHES = { "美加": ["台北仁愛", "桃園中正", "新竹光明", "台中向上", "台中崇德", "高雄巨蛋"], "康博": ["台北大安", "桃園藝文", "新竹竹北", "台中惠文", "台中北屯", "台南安平"] };
+
+const SERVICE_QUESTIONS = [
+  { id: "s1", title: "一、醫療專業技術", desc: "操作醫療儀器時注重顧客安全，確保參數設定準確。於手術與微整協助中落實無菌原則。" },
+  { id: "s2", title: "二、正向態度與團隊合作", desc: "具備正向應對態度，能迅速且有效處理現場顧客需求。尊重團隊同仁，主動支援。" },
+  { id: "s3", title: "三、自我紀律與職業素養", desc: "遵守工作規範，具備良好時間觀念，並維持服儀整潔。配合診所教育訓練。" },
+  { id: "s4", title: "四、療程衛教與客戶應對技巧", desc: "態度親切及說明衛教時清楚明瞭與顧客互動良好，積極協助預約回診。" },
+  { id: "s5", title: "五、團隊正向溝通與配合", desc: "能與店內各部門保持良好溝通，積極配合協作，展現互助精神。" },
+  { id: "s6", title: "六、壓力管理與應對能力", desc: "遇到問題或客戶突發狀況時，能冷靜處理、適時回報主管，並協助尋求有效解決方案。" },
+  { id: "s7", title: "七、醫療突發狀況應變能力", desc: "面對醫療突發狀況能冷靜應對，迅速執行急救處置並安撫客戶情緒。" },
+  { id: "s8", title: "八、確認護理執業執照期限", desc: "主動留意執照效期，確實完成積分學習並於期限內完成換照，避免逾期。" },
+  { id: "s9", title: "九、優良服務品質", desc: "落實服務流程並重視細節，熟悉療程內容，能自信回應顧客問題。醫療紀錄書寫必須完整。" },
+  { id: "s10", title: "十、孰悉各醫師需求與習性", desc: "了解各醫師特性，熟記其手術與微整慣用物品、針具與泡製習慣，能精準協助準備。" }
+];
+
+const SAFETY_SECTIONS = [
+  { id: "sec-0", title: "一.手術&微整無菌操作稽核表", categories: [
+    { title: "A 進房前準備", items: [{ id: "m1_a1", text: "1.環境整潔、無雜物、已完成消毒", isRed: false }, { id: "m1_a2", text: "2.確實檢查無菌包有效期限與封口完整", isRed: true }, { id: "m1_a3", text: "3.器械分類擺放正確（清潔 / 污染分明）", isRed: false }, { id: "m1_a4", text: "4.個人防護具配戴完整（口罩、帽子）", isRed: false }, { id: "m1_a5", text: "5.手術床及靠枕無菌舖單覆蓋完整性", isRed: false }] },
+    { title: "B 洗手與穿脫無菌衣/手套", items: [{ id: "m1_b1", text: "1.正確執行外科手消（流程完整）", isRed: true }, { id: "m1_b2", text: "2.開啟無菌衣方式正確、無污染", isRed: false }, { id: "m1_b3", text: "3.戴手套流程正確（closed method）", isRed: false }, { id: "m1_b4", text: "4.手套未接觸口罩/面罩等污染區", isRed: false }, { id: "m1_b5", text: "5.手套穿戴後保持於胸前、未垂落", isRed: true }] },
+    { title: "C 手術/微整跟診中的無菌操作", items: [{ id: "m1_c1", text: "1.維持手術台與無菌區高度一致", isRed: false }, { id: "m1_c2", text: "2.器械使用未跨過污染區", isRed: false }, { id: "m1_c3", text: "3.手術(水優/酒優/克菌寧)/微整注射前皮膚消毒正確( 克菌寧由內而外≧2次 )", isRed: true }, { id: "m1_c4", text: "4.協助手法正確，不跨越無菌區", isRed: false }, { id: "m1_c5", text: "5.針具未接觸污染物", isRed: false }, { id: "m1_c6", text: "6.廢針即時丟入利器盒(尖銳及針具數量正確)", isRed: true }, { id: "m1_c7", text: "7.操作過程未觸碰未消毒區域", isRed: false }] },
+    { title: "D 手術後收尾無菌流程", items: [{ id: "m1_d1", text: "1.器械回收數量正確", isRed: false }, { id: "m1_d2", text: "2.無菌包準備內容正確(器械+包布)", isRed: false }, { id: "m1_d3", text: "3.廢棄物分類（一般 / 感染性）正確", isRed: false }, { id: "m1_d4", text: "4.手術床、桌面及燈把確實消毒", isRed: false }] },
+    { title: "E 紀錄與完整性", items: [{ id: "m1_e1", text: "1.手術記錄 / 物品使用表完整填寫", isRed: true }, { id: "m1_e2", text: "2.環境恢復整潔、依標準完成", isRed: false }] }
+  ]},
+  { id: "sec-1", title: "二.手術紀錄書寫檢視表單", categories: [
+    { title: "A 手術、麻醉同意書檢視", items: [{ id: "m2_a1", text: "1.病人基本資料填寫完整", isRed: false }, { id: "m2_a2", text: "2.手術名稱與實際執行一致", isRed: true }, { id: "m2_a3", text: "3.風險、副作用、替代方案說明完整", isRed: false }, { id: "m2_a4", text: "4.麻醉方式記載清楚", isRed: false }, { id: "m2_a5", text: "5.顧客簽名", isRed: true }, { id: "m2_a6", text: "6.醫師簽名", isRed: true }, { id: "m2_a7", text: "7.日期時間填寫完整", isRed: false }] },
+    { title: "B 手術紀錄單檢視", items: [{ id: "m2_b1", text: "1.術前注意事項同意書", isRed: true }, { id: "m2_b2", text: "2.手術評估表", isRed: true }, { id: "m2_b3", text: "3.麻醉前評估單", isRed: true }, { id: "m2_b4", text: "4.手術前準備紀錄表", isRed: true }, { id: "m2_b5", text: "5.輸血同意書", isRed: true }, { id: "m2_b6", text: "6.手術紀錄書寫完整", isRed: true }, { id: "m2_b7", text: "7.使用器械／尖銳及紗布計數／植入物+保固卡完整性填寫/引流管", isRed: true }, { id: "m2_b8", text: "8.出血量、特殊情況記錄", isRed: true }, { id: "m2_b9", text: "9.術後處置與醫囑紀錄(給藥紀錄及口服藥拍照上傳)", isRed: true }, { id: "m2_b10", text: "10.檢體(脂肪液)拍照", isRed: true }, { id: "m2_b11", text: "11.恢復室紀錄書寫完整(生命徵象)", isRed: true }, { id: "m2_b12", text: "12.管制藥品確認餘量及填寫表單確實", isRed: true }] },
+    { title: "C 醫師紀錄檢視", items: [{ id: "m2_c1", text: "1.手術前諮紀錄完整", isRed: true }, { id: "m2_c2", text: "2.手術描述", isRed: false }, { id: "m2_c3", text: "3.醫師簽名與日期", isRed: true }] }
+  ]},
+  { id: "sec-2", title: "三.管制藥品管理稽核表", categories: [
+    { title: "A.管制藥品基本管理", items: [{ id: "m3_a1", text: "1.管制藥品有指定專責管理人", isRed: false }, { id: "m3_a2", text: "2.管制藥品清冊建立且更新", isRed: false }, { id: "m3_a3", text: "3.藥品來源合法且文件齊全", isRed: true }] },
+    { title: "B 存放與保管安全", items: [{ id: "m3_b1", text: "1.管制藥品上鎖專櫃存放", isRed: false }, { id: "m3_b2", text: "2.鑰匙/密碼由專人管理", isRed: false }, { id: "m3_b3", text: "3.存放環境溫度與安全符合規範", isRed: false }] },
+    { title: "C 使用與調劑安全", items: [{ id: "m3_c1", text: "1.依醫師醫囑使用", isRed: false }, { id: "m3_c2", text: "2.使用前進行藥品 Double Check", isRed: false }, { id: "m3_c3", text: "3.劑量、病人、時間紀錄正確", isRed: true }] },
+    { title: "D 盤點與帳務一致性", items: [{ id: "m3_d1", text: "1.定期盤點（至少每月）", isRed: true }, { id: "m3_d2", text: "2.帳冊數量與實際數量一致", isRed: true }, { id: "m3_d3", text: "3.異常差異有即時通報與說明", isRed: false }] },
+    { title: "E 報廢、遺失與異常通報", items: [{ id: "m3_e1", text: "1.過期藥品依規定報廢", isRed: false }, { id: "m3_e2", text: "2.遺失或短缺依規定通報", isRed: false }, { id: "m3_e3", text: "3.相關紀錄完整保存", isRed: true }] }
+  ]},
+  { id: "sec-3", title: "四.微整醫療安全稽核表", categories: [
+    { title: "A.療程前衛教完整性", items: [{ id: "m4_a1", text: "1.清楚說明療程目的與原理", isRed: false }, { id: "m4_a2", text: "2.說明適應症與限制", isRed: false }, { id: "m4_a3", text: "3.說明可能風險與副作用", isRed: false }, { id: "m4_a4", text: "4.確認顧客理解內容", isRed: false }] },
+    { title: "B 療程前評估與安全確認", items: [{ id: "m4_b1", text: "1.雙重病人辨識（姓名／生日）", isRed: true }, { id: "m4_b2", text: "2.療程項目、部位、劑量再次確認", isRed: true }, { id: "m4_b3", text: "3.過敏史、藥物史、懷孕史確認", isRed: false }, { id: "m4_b4", text: "4.禁忌症評估", isRed: false }, { id: "m4_b5", text: "5.治療部位與能量設定確認", isRed: false }] },
+    { title: "C 產品與用藥安全(三讀五對)", items: [{ id: "m4_c1", text: "1.產品來源合法且包裝完整", isRed: false }, { id: "m4_c2", text: "2.效期、批號記錄完整", isRed: false }, { id: "m4_c3", text: "3.冷藏產品保存溫控符合規範", isRed: false }, { id: "m4_c4", text: "4.注射前再次與醫師確認產品", isRed: true }] },
+    { title: "D 療程中高風險監測", items: [{ id: "m4_d1", text: "1.即時觀察疼痛、蒼白、紫紺", isRed: false }, { id: "m4_d2", text: "2.疑似血管阻塞立即停針", isRed: true }, { id: "m4_d3", text: "3.依SOP啟動緊急處置流程", isRed: false }] },
+    { title: "E 療程後立即照護與返家注意事項", items: [{ id: "m4_e1", text: "1.提醒療程後照護與禁忌說明清楚", isRed: true }, { id: "m4_e2", text: "2.異常警訊與回診說明", isRed: false }, { id: "m4_e3", text: "3.已確認顧客藥物過敏史及若診所領取給藥須完成用藥衛教", isRed: true }, { id: "m4_e4", text: "4.已開立處方籤(拍照上傳至紀錄)並說明至合作藥局領藥流程", isRed: true }] }
+  ]},
+  { id: "sec-4", title: "五.電音波醫療安全稽核表", categories: [
+    { title: "A.療程前安全評估", items: [{ id: "m5_a1", text: "1.雙重病人辨識", isRed: true }, { id: "m5_a2", text: "2.禁忌症評估（心臟節律器、金屬植入物）", isRed: true }, { id: "m5_a3", text: "3.治療部位與能量設定確認", isRed: false }] },
+    { title: "B 設備與耗材安全", items: [{ id: "m5_b1", text: "1.設備校正與保養紀錄", isRed: false }, { id: "m5_b2", text: "2.探頭／耗材效期確認", isRed: false }, { id: "m5_b3", text: "3.導電介質使用正確", isRed: false }] },
+    { title: "C 療程中操作安全", items: [{ id: "m5_c1", text: "1.能量輸出依醫囑設定", isRed: false }, { id: "m5_c2", text: "2.持續詢問病人感受", isRed: false }, { id: "m5_c3", text: "3.皮膚即時反應監測", isRed: false }] },
+    { title: "D 燙傷與併發症預防", items: [{ id: "m5_d1", text: "1.避免同點重複施打", isRed: false }, { id: "m5_d2", text: "2.異常紅腫立即停機回報", isRed: false }] },
+    { title: "E 術後照護與紀錄", items: [{ id: "m5_e1", text: "1.術後護理與防曬說明", isRed: false }, { id: "m5_e2", text: "2.併發症回診警訊說明", isRed: false }, { id: "m5_e3", text: "3.療程紀錄完整", isRed: false }, { id: "m5_e4", text: "4.已確認顧客藥物過敏史及若診所領取給藥須完成用藥衛教", isRed: true }, { id: "m5_e5", text: "5.已開立處方籤(拍照上傳至紀錄)並說明至合作藥局領藥流程", isRed: true }] }
+  ]}
+];
+const SAFETY_TOTAL = SAFETY_SECTIONS.reduce((s, sec) => s + sec.categories.reduce((c, cat) => c + cat.items.length, 0), 0);
+
+const COUNTER_QUESTIONS = [
+  { id: "c1", title: "1. 客服櫃台服務品質", type: "score", desc: "親切禮貌、溝通表達清楚、主動關心與協助客戶，積極維護客情關係，建立顧客與夥伴信賴。", scores: { 5: "展現服務熱誠，提供清晰資訊，有效處理複雜或突發情況，讓人感到安心信賴，是團隊的服務典範。", 4: "親切互動具專業形象，接待流程順暢，遇複雜情境具基本應變能力。", 3: "可確實完成基本工作內容，應對合宜，服務表現接近標準要求。", 2: "可配合基本流程操作，面對問題時願意尋求協助，互動表現及專業熟悉度仍有強化空間。", 1: "尚未穩定，需持續協助以提升應對能力與服務品質。" } },
+  { id: "c2", title: "2. 感恩善念", type: "score", desc: "以純淨善念，感恩每一次遇見，打造自己與他人(包括顧客與夥伴)的善循環。", scores: { 5: "以自身的行為與態度，營造感恩善念的工作氛圍，感染和帶動團隊間的互助和協作，是團隊氣氛的正向推手。", 4: "珍惜與回饋夥伴的協助，經常做對人有幫助的事，經常說對人有幫助的話，以具體行動回饋團隊情誼。", 3: "時常看見夥伴的好，感謝夥伴的協助與支持，維持正向交流氛圍。", 2: "任何事情都是理所當然。", 1: "責怪他人。" } },
+  { id: "c3", title: "3. 正向樂觀", type: "score", desc: "無論遇到什麼挑戰，始終保持高度樂觀，並能主動激勵團隊士氣，成為團隊的精神支柱。", scores: { 5: "主動伸出援手，用自己樂觀積極的態度影響和感染身邊的人，讓顧客與夥伴感受到溫暖和勇氣。", 4: "主動分享美好和積極經驗，鼓勵與支持夥伴保持樂觀心態。", 3: "保持愉悅微笑，面對困難挑戰時保持積極正向，相信一切都有解決的辦法。", 2: "遇到問題偶有情緒。", 1: "負面思考較多，有時會影響團隊或顧客。" } },
+  { id: "c4", title: "4. 互利共好", type: "score", desc: "無私分享，能換位思考，整合資源，提供多元解決方案。", scores: { 5: "主動看見團隊的問題或需要，能整合內外部資源，提供多元解決方案，提升效率，實現資源最大化利用。", 4: "能換位思考，理解對方需求和困難，從對方角度尋求平衡方案，幫助解決團隊的挑戰或困難。", 3: "主動分享經驗和知識，協助夥伴解決基本問題，不求回報。", 2: "會嘗試用對自己最好的方式處理。", 1: "依喜好做事，不願合作，影響團隊或顧客。" } },
+  { id: "c5", title: "5. 持續優化", type: "score", desc: "持續精進服務，不斷從經驗中創造新可能，為自己與他人(包括顧客與夥伴)累積幸福資本。", scores: { 5: "定期回顧與總結工作，探索新方法，主動提出優化方向並執行，開創新的可能性和機會，累積幸福資本。", 4: "展現持續學習精神，在夥伴需要時提供實質支持和幫助，建立信任和穩定的合作關係。", 3: "主動收集反饋意見，優化與提升自身服務質量。", 2: "依照過往經驗下判斷，問題會重覆發生。", 1: "隱匿或逃避問題，等著讓他人處理。" } },
+  { id: "c6", title: "6. 綜合評語與回饋", type: "text", desc: "請主管給予夥伴本月的具體表現回饋與建議（此題僅供文字回饋，不列入計分）。" }
+];
+
+/* ============ 記錄範本與獎金計算 ============ */
+const todayStr = () => new Date().toISOString().split("T")[0];
+const getEmptyNursingRecord = () => ({
+  serviceData: { self: {}, manager: {}, storeManager: {} },
+  serviceSignatures: { selfDate: todayStr(), selfSubmitted: false, managerName: "", managerDate: todayStr(), managerSubmitted: false, storeManagerName: "", storeManagerDate: todayStr(), storeManagerComment: "", storeManagerSubmitted: false },
+  safetyData: {}, safetySignatures: { headNurseName: "" },
+  isServiceComplete: false, isSafetyComplete: false
+});
+const getEmptyCounterEval = () => ({ evaluatorTitle: "", evaluatorName: "", evaluateDate: todayStr(), scores: {}, feedback: "", isComplete: false });
+
+const calcNursingBonus = (rec) => {
+  let serviceBonus = 0, safetyBonus = 0, serviceScore = 0, redFail = 0, blackFail = 0;
+  if (rec) {
+    serviceScore = Object.values(rec.serviceData?.storeManager || {}).reduce((s, v) => s + (v || 0), 0);
+    if (rec.isServiceComplete) { if (serviceScore === 10) serviceBonus = 3000; else if (serviceScore >= 7) serviceBonus = 1500; }
+    SAFETY_SECTIONS.forEach(sec => sec.categories.forEach(cat => cat.items.forEach(it => { if (rec.safetyData?.[it.id] === "fail") { if (it.isRed) redFail++; else blackFail++; } })));
+    if (rec.isSafetyComplete) { if (redFail > 0) safetyBonus = 0; else if (blackFail === 0) safetyBonus = 3000; else if (blackFail <= 5) safetyBonus = 1500; }
+  }
+  return { serviceBonus, safetyBonus, total: serviceBonus + safetyBonus, serviceScore, redFail, blackFail };
+};
+const calcCounterBonus = (avg) => { if (avg >= 5) return 3000; if (avg >= 4) return 2000; if (avg >= 3) return 1000; return 0; };
+const calcDirectorBonus = (avg) => { if (avg >= 5) return 4000; if (avg >= 4) return 3000; if (avg >= 3) return 2000; return 0; };
+const singleEvalAvg = (ev) => { const vals = COUNTER_QUESTIONS.filter(q => q.type === "score").map(q => ev.scores?.[q.id] || 0); return vals.reduce((a, b) => a + b, 0) / 5; };
+const round1 = (n) => Math.round(n * 10) / 10;
+
+/* ============ 共用 UI ============ */
+const Card = ({ children, className = "" }) => <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 ${className}`}>{children}</div>;
+const Btn = ({ children, onClick, disabled, variant = "primary", className = "", small }) => {
+  const base = small ? "px-3 py-1.5 text-sm" : "px-5 py-3";
+  const styles = {
+    primary: "bg-teal-700 text-white hover:bg-teal-600 disabled:bg-slate-300",
+    secondary: "bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:text-slate-400",
+    danger: "bg-red-600 text-white hover:bg-red-500 disabled:bg-slate-300",
+    amber: "bg-amber-500 text-white hover:bg-amber-400 disabled:bg-slate-300",
+    sky: "bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-300"
+  };
+  return <button onClick={onClick} disabled={disabled} className={`${base} rounded-xl font-bold transition-colors ${styles[variant]} ${className}`}>{children}</button>;
+};
+const Field = ({ label, children }) => <div className="flex-1 min-w-[130px]"><label className="text-xs text-slate-500 font-bold block mb-1">{label}</label>{children}</div>;
+const Sel = ({ value, onChange, options, placeholder }) => (
+  <select value={value} onChange={e => onChange(e.target.value)} className="w-full border border-slate-300 p-2.5 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-teal-500">
+    {placeholder !== undefined && <option value="">{placeholder}</option>}
+    {options.map(o => <option key={o} value={o}>{o}</option>)}
+  </select>
+);
+const Spinner = ({ text = "資料載入中…" }) => (
+  <div className="flex flex-col items-center justify-center py-16 gap-3">
+    <div className="w-10 h-10 border-4 border-teal-600 border-t-transparent rounded-full animate-spin"></div>
+    <div className="text-slate-500 font-medium text-sm">{text}</div>
+  </div>
+);
+const SaveBadge = ({ state }) => {
+  if (!state) return null;
+  const map = { saving: ["bg-amber-100 text-amber-700", "儲存中…"], saved: ["bg-teal-100 text-teal-700", "✓ 已儲存至雲端"], error: ["bg-red-100 text-red-700", "✗ 儲存失敗，請重試"] };
+  const [cls, txt] = map[state];
+  return <span className={`px-3 py-1 rounded-full text-xs font-bold ${cls}`}>{txt}</span>;
+};
+
+/* 簡約線條 icon */
+const IconNursing = () => (
+  <svg viewBox="0 0 48 48" className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+    <path d="M24 12v24M12 24h24" />
+    <rect x="6" y="6" width="36" height="36" rx="10" />
+  </svg>
+);
+const IconCounter = () => (
+  <svg viewBox="0 0 48 48" className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="24" cy="17" r="7" />
+    <path d="M10 40c0-8 6.5-12 14-12s14 4 14 12" />
+  </svg>
+);
+const IconDash = () => (
+  <svg viewBox="0 0 24 24" className="w-6 h-6 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M4 20V10M12 20V4M20 20v-7" />
+  </svg>
+);
+const IconReport = () => (
+  <svg viewBox="0 0 24 24" className="w-6 h-6 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 3h9l4 4v14H6z M15 3v4h4 M9 12h7M9 16h7" />
+  </svg>
+);
+const IconLink = () => (
+  <svg viewBox="0 0 24 24" className="w-6 h-6 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
+  </svg>
+);
+const IconForm = () => (
+  <svg viewBox="0 0 24 24" className="w-6 h-6 mx-auto" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" />
+  </svg>
+);
+
+/* ============ 截圖轉存 (Canvas 繪製，無外部依賴) ============ */
+const fitText = (ctx, text, maxW) => {
+  let t = String(text ?? "");
+  if (ctx.measureText(t).width <= maxW) return t;
+  while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t + "…";
+};
+const exportPNG = (title, sections) => {
+  const W = 1240, pad = 28, scale = 2;
+  const FONT = "'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif";
+  let H = 100;
+  sections.forEach(s => { H += (s.heading ? 46 : 0) + (s.subheading ? 30 : 0) + 36 + s.rows.length * 34 + 26; });
+  const cv = document.createElement("canvas");
+  cv.width = W * scale; cv.height = H * scale;
+  const ctx = cv.getContext("2d"); ctx.scale(scale, scale);
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#0f766e"; ctx.fillRect(0, 0, W, 6);
+  ctx.fillStyle = "#0f172a"; ctx.font = `bold 22px ${FONT}`;
+  ctx.fillText(title, pad, 46);
+  ctx.fillStyle = "#94a3b8"; ctx.font = `12px ${FONT}`;
+  ctx.fillText(`匯出時間：${new Date().toLocaleString("zh-TW")}`, pad, 68);
+  let y = 92;
+  sections.forEach(s => {
+    if (s.heading) { ctx.fillStyle = "#0f766e"; ctx.font = `bold 16px ${FONT}`; ctx.fillText(s.heading, pad, y + 18); y += 46; }
+    if (s.subheading) { ctx.fillStyle = "#64748b"; ctx.font = `12px ${FONT}`; ctx.fillText(s.subheading, pad, y); y += 30; }
+    const weights = s.weights || s.headers.map(() => 1);
+    const totalW = weights.reduce((a, b) => a + b, 0);
+    const colX = []; let acc = pad;
+    weights.forEach(w => { colX.push(acc); acc += (W - pad * 2) * (w / totalW); });
+    const colWidths = weights.map(w => (W - pad * 2) * (w / totalW));
+    ctx.fillStyle = "#f1f5f9"; ctx.fillRect(pad, y, W - pad * 2, 32);
+    ctx.fillStyle = "#475569"; ctx.font = `bold 12px ${FONT}`;
+    s.headers.forEach((h, i) => ctx.fillText(fitText(ctx, h, colWidths[i] - 12), colX[i] + 6, y + 21));
+    y += 32;
+    ctx.font = `12px ${FONT}`;
+    s.rows.forEach((row, ri) => {
+      if (ri % 2) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(pad, y, W - pad * 2, 34); }
+      ctx.strokeStyle = "#e2e8f0"; ctx.beginPath(); ctx.moveTo(pad, y + 34); ctx.lineTo(W - pad, y + 34); ctx.stroke();
+      row.forEach((cell, i) => {
+        const str = String(cell ?? "");
+        ctx.fillStyle = str.startsWith("$") ? "#d97706" : "#334155";
+        ctx.fillText(fitText(ctx, str, colWidths[i] - 12), colX[i] + 6, y + 22);
+      });
+      y += 34;
+    });
+    y += 26;
+  });
+  const a = document.createElement("a");
+  a.download = `${title}.png`;
+  a.href = cv.toDataURL("image/png");
+  a.click();
+};
+
+/* ============ 主應用 ============ */
+export default function AppraisalSystem() {
+  const [view, setView] = useState("portal");
+  const [locked, setLocked] = useState(false); // 分享連結進入時鎖定部門
+  const [passwords, setPasswords] = useState(DEFAULT_PASSWORDS);
+  const [rosters, setRosters] = useState(DEFAULT_ROSTERS);
+  const [dashStatus, setDashStatus] = useState({});
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [role, setRole] = useState(null);
+  const [modal, setModal] = useState({ show: false });
+  const [pwModal, setPwModal] = useState({ show: false });
+
+  const showMsg = (title, msg) => setModal({ show: true, type: "alert", title, msg });
+  const showConfirm = (title, msg, onConfirm) => setModal({ show: true, type: "confirm", title, msg, onConfirm });
+  const askPassword = (title, pwKey, onSuccess) => setPwModal({ show: true, title, pwKey, onSuccess, input: "", visible: false });
+
+  const loadSettings = useCallback(async () => {
+    const [pw, ro, ds] = await Promise.all([SGET("cfg:passwords"), SGET("cfg:rosters"), SGET("cfg:dashstatus")]);
+    if (pw) setPasswords({ ...DEFAULT_PASSWORDS, ...pw });
+    if (ro) setRosters(ro);
+    if (ds) setDashStatus(ds);
+    setSettingsLoaded(true);
+  }, []);
+  useEffect(() => { loadSettings(); }, [loadSettings]);
+
+  useEffect(() => {
+    try {
+      const h = window.location.hash || "";
+      if (h.includes("dept=nursing")) { setView("nursing"); setLocked(true); }
+      else if (h.includes("dept=counter")) { setView("counter"); setLocked(true); }
+    } catch (e) {}
+  }, []);
+
+  const verifyPw = () => {
+    const { pwKey, onSuccess, input } = pwModal;
+    if (pwKey === "superadmin_or_hr") {
+      if (input === passwords.superadmin) { setPwModal({ show: false }); onSuccess("superadmin"); return; }
+      if (input === passwords.hr) { setPwModal({ show: false }); onSuccess("hr"); return; }
+    } else if (input === passwords[pwKey] || input === passwords.superadmin) {
+      setPwModal({ show: false }); onSuccess(input === passwords.superadmin ? "superadmin" : pwKey); return;
+    }
+    showMsg("密碼錯誤", "輸入的密碼不正確，請再試一次。");
+  };
+
+  const shareLink = (dept) => {
+    let url = "";
+    try { url = window.location.href.split("#")[0] + "#dept=" + dept; } catch (e) { url = "#dept=" + dept; }
+    const deptName = dept === "nursing" ? "護理部" : "櫃台客服";
+    try {
+      navigator.clipboard.writeText(url).then(
+        () => showMsg("連結已複製", `${deptName}評核專屬連結已複製到剪貼簿。\n\n${url}\n\n評核者透過此連結進入時，只會看到${deptName}系統，無法切換至主入口或其他部門。`),
+        () => showMsg("請手動複製連結", `${url}\n\n（長按或反白上方連結複製）\n評核者透過此連結進入時，只會看到${deptName}系統。`)
+      );
+    } catch (e) {
+      showMsg("請手動複製連結", `${url}\n\n評核者透過此連結進入時，只會看到${deptName}系統。`);
+    }
+  };
+
+  const nav = { view, setView, locked, passwords, setPasswords, rosters, setRosters, dashStatus, setDashStatus, role, setRole, showMsg, showConfirm, askPassword, loadSettings, shareLink };
+
+  return (
+    <div className="min-h-screen bg-slate-100" style={{ fontFamily: "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif" }}>
+      {!settingsLoaded ? <Spinner text="系統初始化中…" /> : (
+        <>
+          {view === "portal" && <Portal nav={nav} />}
+          {view === "nursing" && <NursingSystem nav={nav} />}
+          {view === "counter" && <CounterSystem nav={nav} />}
+          {view === "admin" && <Admin nav={nav} />}
+        </>
+      )}
+
+      {modal.show && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-bold text-slate-800 mb-3">{modal.title}</h3>
+            <div className="text-slate-600 text-sm mb-6 whitespace-pre-line bg-slate-50 p-4 rounded-xl border border-slate-100 max-h-64 overflow-y-auto break-all">{modal.msg}</div>
+            <div className="flex gap-3">
+              {modal.type === "confirm" && <Btn variant="secondary" className="flex-1" onClick={() => setModal({ show: false })}>取消</Btn>}
+              <Btn variant={modal.type === "confirm" ? "danger" : "primary"} className="flex-1" onClick={() => { if (modal.onConfirm) modal.onConfirm(); setModal({ show: false }); }}>確定</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pwModal.show && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+            <h3 className="text-lg font-bold text-slate-800 mb-4">{pwModal.title}</h3>
+            <div className="relative mb-4">
+              <input type={pwModal.visible ? "text" : "password"} autoFocus value={pwModal.input || ""} onChange={e => setPwModal({ ...pwModal, input: e.target.value })}
+                onKeyDown={e => { if (e.key === "Enter") verifyPw(); }}
+                className="w-full border border-slate-300 p-3 pr-12 rounded-xl outline-none focus:ring-2 focus:ring-teal-500" placeholder="請輸入密碼" />
+              <button onClick={() => setPwModal({ ...pwModal, visible: !pwModal.visible })}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm font-bold">
+                {pwModal.visible ? "隱藏" : "顯示"}
+              </button>
+            </div>
+            <div className="flex gap-3">
+              <Btn variant="secondary" className="flex-1" onClick={() => setPwModal({ show: false })}>取消</Btn>
+              <Btn className="flex-1" onClick={verifyPw}>確認</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============ 入口 Portal ============ */
+function Portal({ nav }) {
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-12">
+      <div className="text-center mb-12">
+        <div className="inline-block bg-teal-700 text-white text-xs font-bold tracking-widest px-4 py-1.5 rounded-full mb-4">康博集團醫療事業群</div>
+        <h1 className="text-3xl font-bold text-slate-800 mb-2">全方位評核系統</h1>
+        <p className="text-slate-500 text-sm">雲端同步 · 評核資料即時保存 · 兩部門獨立作業</p>
+      </div>
+      <div className="grid md:grid-cols-2 gap-6 mb-10">
+        <Card className="p-8 text-center hover:shadow-md transition-shadow">
+          <div className="text-sky-700 mb-4"><IconNursing /></div>
+          <h2 className="text-2xl font-bold text-sky-800 mb-2">護理部評核</h2>
+          <p className="text-slate-500 text-sm mb-6 leading-relaxed">服務品質（10 項）＋ 醫療安全（96 項）<br />美加各分院護理師專用</p>
+          <Btn variant="sky" className="w-full" onClick={() => nav.setView("nursing")}>進入系統</Btn>
+        </Card>
+        <Card className="p-8 text-center hover:shadow-md transition-shadow">
+          <div className="text-teal-700 mb-4"><IconCounter /></div>
+          <h2 className="text-2xl font-bold text-teal-800 mb-2">櫃台客服評核</h2>
+          <p className="text-slate-500 text-sm mb-6 leading-relaxed">主管多對一評核（5 項計分＋綜合回饋）<br />美加、康博雙品牌櫃台夥伴</p>
+          <Btn className="w-full" onClick={() => nav.setView("counter")}>進入系統</Btn>
+        </Card>
+      </div>
+      <div className="text-center">
+        <button onClick={() => nav.askPassword("總管理密碼驗證", "superadmin", () => { nav.setRole("superadmin"); nav.setView("admin"); })}
+          className="text-xs text-slate-400 hover:text-slate-600 font-bold underline underline-offset-4">⚙ 總管理後台</button>
+      </div>
+    </div>
+  );
+}
+
+const PageHeader = ({ title, subtitle, onBack, right, theme = "teal" }) => (
+  <div className={theme === "sky" ? "bg-sky-800 text-white" : "bg-teal-800 text-white"}>
+    <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center gap-3">
+        {onBack && <button onClick={onBack} className="bg-white/15 hover:bg-white/25 rounded-lg px-3 py-1.5 text-sm font-bold transition-colors">← 返回</button>}
+        <div>
+          <h1 className="font-bold text-lg leading-tight">{title}</h1>
+          {subtitle && <div className={`text-xs ${theme === "sky" ? "text-sky-200" : "text-teal-200"}`}>{subtitle}</div>}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">{right}</div>
+    </div>
+  </div>
+);
+
+const MenuTile = ({ icon, title, desc, onClick, theme = "teal" }) => (
+  <Card className="p-6 text-center hover:shadow-md transition-shadow cursor-pointer" >
+    <div onClick={onClick}>
+      <div className={theme === "sky" ? "text-sky-700 mb-3" : "text-teal-700 mb-3"}>{icon}</div>
+      <h3 className="font-bold text-slate-800 mb-1">{title}</h3>
+      <p className="text-xs text-slate-500">{desc}</p>
+    </div>
+  </Card>
+);
+
+/* ============ 護理部（獨立事業體） ============ */
+const nKey = (month, branch, nurse) => `assessments:${month}:${branch}:${nurse}`;
+
+function NursingSystem({ nav }) {
+  const [sub, setSub] = useState("menu"); // menu | select | service | safety | dashboard | report
+  const [branch, setBranch] = useState("");
+  const [nurse, setNurse] = useState("");
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [record, setRecord] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const nurses = branch ? (nav.rosters.nursing[branch] || []).filter(n => n.active).map(n => n.name) : [];
+
+  const openForm = async (which) => {
+    if (!branch || !nurse || !month) { nav.showMsg("請完成選擇", "請先選擇分院、護理師與評核月份。"); return; }
+    setLoading(true);
+    const rec = (await SGET(nKey(month, branch, nurse))) || getEmptyNursingRecord();
+    setRecord(rec); setSub(which); setLoading(false);
+  };
+
+  if (sub === "service") return <ServiceForm nav={nav} branch={branch} nurse={nurse} month={month} initial={record} onBack={() => setSub("select")} />;
+  if (sub === "safety") return <SafetyForm nav={nav} branch={branch} nurse={nurse} month={month} initial={record} onBack={() => setSub("select")} />;
+  if (sub === "dashboard") return <NursingDashboard nav={nav} onBack={() => setSub("menu")} />;
+  if (sub === "report") return <NursingReport nav={nav} onBack={() => setSub("menu")} />;
+
+  if (sub === "select") return (
+    <div>
+      <PageHeader theme="sky" title="護理部評核作業" subtitle="美加各分院" onBack={() => setSub("menu")} />
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <Card className="p-6 mb-6">
+          <div className="flex flex-wrap gap-4">
+            <Field label="分院"><Sel value={branch} onChange={v => { setBranch(v); setNurse(""); }} options={NURSING_BRANCHES} placeholder="選擇分院" /></Field>
+            <Field label="護理師"><Sel value={nurse} onChange={setNurse} options={nurses} placeholder="選擇護理師" /></Field>
+            <Field label="評核月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field>
+          </div>
+        </Card>
+        {loading ? <Spinner /> : (
+          <div className="grid md:grid-cols-2 gap-5">
+            <Card className="p-6 text-center">
+              <h3 className="font-bold text-lg text-slate-800 mb-1">服務品質評核</h3>
+              <p className="text-xs text-slate-500 mb-4">10 項達標制 · 自評 → 主管 → 店經理核決</p>
+              <Btn variant="sky" className="w-full" onClick={() => openForm("service")} disabled={!nurse}>開始評核</Btn>
+            </Card>
+            <Card className="p-6 text-center">
+              <h3 className="font-bold text-lg text-slate-800 mb-1">醫療安全評核</h3>
+              <p className="text-xs text-slate-500 mb-4">{SAFETY_TOTAL} 項稽核 · 護理長解鎖編輯 · 紅字一票否決</p>
+              <Btn variant="sky" className="w-full" onClick={() => openForm("safety")} disabled={!nurse}>開始稽核</Btn>
+            </Card>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <PageHeader theme="sky" title="護理部評核系統" subtitle="美加各分院 · 獨立作業區"
+        onBack={nav.locked ? null : () => nav.setView("portal")}
+        right={nav.locked ? <span className="text-xs bg-white/15 px-3 py-1.5 rounded-full font-bold">評核者專用通道</span> : null} />
+      <div className="max-w-4xl mx-auto px-4 py-10">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <MenuTile theme="sky" icon={<IconForm />} title="評核作業" desc="填寫服務品質與醫療安全表單" onClick={() => setSub("select")} />
+          <MenuTile theme="sky" icon={<IconDash />} title="評核進度" desc="各分院護理師完成狀態" onClick={() => setSub("dashboard")} />
+          <MenuTile theme="sky" icon={<IconReport />} title="獎金結算報表" desc="總管 / 人資密碼檢視" onClick={() => setSub("report")} />
+          <MenuTile theme="sky" icon={<IconLink />} title="複製評核連結" desc="分享給評核者的專屬入口" onClick={() => nav.shareLink("nursing")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ServiceForm({ nav, branch, nurse, month, initial, onBack }) {
+  const [rec, setRec] = useState(initial);
+  const [stage, setStage] = useState("self");
+  const [unlocked, setUnlocked] = useState({ self: true, manager: false, storeManager: false });
+  const [saveState, setSaveState] = useState(null);
+
+  const persist = async (newRec) => {
+    setRec(newRec); setSaveState("saving");
+    const ok = await SSET(nKey(month, branch, nurse), newRec);
+    setSaveState(ok ? "saved" : "error");
+  };
+
+  const setScore = (qid, val) => {
+    if (!unlocked[stage]) return;
+    persist({ ...rec, serviceData: { ...rec.serviceData, [stage]: { ...rec.serviceData[stage], [qid]: val } } });
+  };
+
+  const tryUnlock = (st) => {
+    if (st === "self") { setStage("self"); return; }
+    if (unlocked[st]) { setStage(st); return; }
+    const key = st === "manager" ? "manager" : "storeManager";
+    const label = st === "manager" ? "主管評核" : "店經理核決";
+    nav.askPassword(`解鎖「${label}」階段`, key, () => { setUnlocked(u => ({ ...u, [st]: true })); setStage(st); });
+  };
+
+  const submitStage = () => {
+    const answered = Object.keys(rec.serviceData[stage] || {}).filter(k => rec.serviceData[stage][k] !== undefined).length;
+    if (answered < SERVICE_QUESTIONS.length) { nav.showMsg("尚未完成", `目前 ${answered}/${SERVICE_QUESTIONS.length} 題，請全部作答後再送出。`); return; }
+    const sig = { ...rec.serviceSignatures };
+    let newRec = { ...rec };
+    if (stage === "self") { sig.selfSubmitted = true; sig.selfDate = todayStr(); }
+    if (stage === "manager") {
+      if (!sig.managerName) { nav.showMsg("缺少簽核人", "請填寫主管姓名後再送出。"); return; }
+      sig.managerSubmitted = true; sig.managerDate = todayStr();
+    }
+    if (stage === "storeManager") {
+      if (!sig.storeManagerName) { nav.showMsg("缺少簽核人", "請填寫店經理姓名後再送出。"); return; }
+      sig.storeManagerSubmitted = true; sig.storeManagerDate = todayStr();
+      newRec.isServiceComplete = true;
+    }
+    newRec = { ...newRec, serviceSignatures: sig };
+    persist(newRec);
+    nav.showMsg("已送出", stage === "storeManager" ? "店經理核決完成，此表單已標記為【評核完成】並計入獎金結算。" : "本階段評核已儲存至雲端。");
+  };
+
+  const setSig = (k, v) => setRec({ ...rec, serviceSignatures: { ...rec.serviceSignatures, [k]: v } });
+  const saveSig = () => persist(rec);
+
+  const stageInfo = {
+    self: { label: "① 同仁自評", done: rec.serviceSignatures.selfSubmitted },
+    manager: { label: "② 主管評核", done: rec.serviceSignatures.managerSubmitted },
+    storeManager: { label: "③ 店經理核決", done: rec.serviceSignatures.storeManagerSubmitted }
+  };
+  const curScore = Object.values(rec.serviceData[stage] || {}).reduce((s, v) => s + (v || 0), 0);
+  const finalScore = Object.values(rec.serviceData.storeManager || {}).reduce((s, v) => s + (v || 0), 0);
+  const bonus = rec.isServiceComplete ? (finalScore === 10 ? 3000 : finalScore >= 7 ? 1500 : 0) : null;
+
+  return (
+    <div>
+      <PageHeader theme="sky" title="服務品質評核" subtitle={`${branch} · ${nurse} · ${month}`} onBack={onBack} right={<SaveBadge state={saveState} />} />
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <div className="flex gap-2 mb-5 flex-wrap">
+          {Object.entries(stageInfo).map(([k, info]) => (
+            <button key={k} onClick={() => tryUnlock(k)}
+              className={`px-4 py-2 rounded-xl text-sm font-bold border-2 transition-colors ${stage === k ? "bg-sky-700 text-white border-sky-700" : info.done ? "bg-sky-50 text-sky-700 border-sky-300" : "bg-white text-slate-500 border-slate-200"}`}>
+              {info.label}{info.done ? " ✓" : ""}{k !== "self" && !unlocked[k] ? " 🔒" : ""}
+            </button>
+          ))}
+          {rec.isServiceComplete && <span className="ml-auto self-center bg-amber-100 text-amber-700 px-3 py-1.5 rounded-full text-xs font-bold">最終 {finalScore}/10 分 · 獎金 ${bonus}</span>}
+        </div>
+
+        <div className="space-y-3 mb-6">
+          {SERVICE_QUESTIONS.map(q => {
+            const val = rec.serviceData[stage]?.[q.id];
+            return (
+              <Card key={q.id} className="p-4">
+                <div className="font-bold text-slate-800 mb-1">{q.title}</div>
+                <div className="text-xs text-slate-500 mb-3 leading-relaxed">{q.desc}</div>
+                <div className="flex gap-2">
+                  <button disabled={!unlocked[stage]} onClick={() => setScore(q.id, 1)} className={`flex-1 py-2.5 rounded-lg font-bold border-2 text-sm transition-colors ${val === 1 ? "bg-sky-50 border-sky-500 text-sky-700" : "bg-white border-slate-200 text-slate-400"}`}>✓ 達標 (1分)</button>
+                  <button disabled={!unlocked[stage]} onClick={() => setScore(q.id, 0)} className={`flex-1 py-2.5 rounded-lg font-bold border-2 text-sm transition-colors ${val === 0 ? "bg-red-50 border-red-400 text-red-600" : "bg-white border-slate-200 text-slate-400"}`}>✗ 未達標 (0分)</button>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+
+        <Card className="p-5 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-slate-800">本階段簽核</h3>
+            <span className="text-sm font-bold text-sky-700">目前得分：{curScore}/10</span>
+          </div>
+          {stage === "manager" && (
+            <div className="mb-3"><Field label="主管姓名"><input value={rec.serviceSignatures.managerName} onChange={e => setSig("managerName", e.target.value)} onBlur={saveSig} className="w-full border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-500" placeholder="請輸入主管姓名" /></Field></div>
+          )}
+          {stage === "storeManager" && (
+            <div className="space-y-3 mb-3">
+              <Field label="店經理姓名"><input value={rec.serviceSignatures.storeManagerName} onChange={e => setSig("storeManagerName", e.target.value)} onBlur={saveSig} className="w-full border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-500" placeholder="請輸入店經理姓名" /></Field>
+              <Field label="總結評語"><textarea value={rec.serviceSignatures.storeManagerComment} onChange={e => setSig("storeManagerComment", e.target.value)} onBlur={saveSig} rows={3} className="w-full border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-500" placeholder="店經理總結評語（選填）" /></Field>
+            </div>
+          )}
+          <Btn variant="sky" className="w-full" disabled={!unlocked[stage]} onClick={submitStage}>
+            {stage === "self" ? "送出自評" : stage === "manager" ? "送出主管評核" : "送出核決（完成本表單）"}
+          </Btn>
+        </Card>
+
+        <div className="text-xs text-slate-400 text-center pb-6">獎金規則：核決 10 分 → $3,000　·　7–9 分 → $1,500　·　6 分以下 → $0</div>
+      </div>
+    </div>
+  );
+}
+
+function SafetyForm({ nav, branch, nurse, month, initial, onBack }) {
+  const [rec, setRec] = useState(initial);
+  const [editable, setEditable] = useState(false);
+  const [saveState, setSaveState] = useState(null);
+  const [activeSec, setActiveSec] = useState(0);
+
+  const persist = async (newRec) => {
+    setRec(newRec); setSaveState("saving");
+    const ok = await SSET(nKey(month, branch, nurse), newRec);
+    setSaveState(ok ? "saved" : "error");
+  };
+
+  const answered = SAFETY_SECTIONS.reduce((s, sec) => s + sec.categories.reduce((c, cat) => c + cat.items.filter(i => rec.safetyData[i.id]).length, 0), 0);
+  const setItem = (id, val) => { if (!editable) return; persist({ ...rec, safetyData: { ...rec.safetyData, [id]: val } }); };
+  const passAllCategory = (cat) => {
+    if (!editable) return;
+    const d = { ...rec.safetyData };
+    cat.items.forEach(i => { d[i.id] = "pass"; });
+    persist({ ...rec, safetyData: d });
+  };
+  const saveDraft = () => {
+    persist(rec);
+    nav.showMsg("已暫存草稿", `目前作答進度 ${answered}/${SAFETY_TOTAL} 已儲存至雲端。\n可隨時回到本表單繼續評核，資料不會遺失。`);
+  };
+  const unlock = () => nav.askPassword("護理長解鎖 (醫療安全評核)", "safetyUnlock", () => setEditable(true));
+
+  const submit = () => {
+    if (answered < SAFETY_TOTAL) { nav.showMsg("尚有漏題", `目前 ${answered}/${SAFETY_TOTAL} 題，醫療安全評核必須全數作答。`); return; }
+    if (!rec.safetySignatures.headNurseName) { nav.showMsg("缺少稽核人", "請填寫護理長稽核姓名。"); return; }
+    const newRec = { ...rec, isSafetyComplete: true };
+    persist(newRec);
+    const b = calcNursingBonus(newRec);
+    nav.showMsg("稽核完成", `紅字不合格：${b.redFail} 項\n黑字不合格：${b.blackFail} 項\n醫療安全獎金：$${b.safetyBonus}`);
+  };
+
+  const b = calcNursingBonus(rec);
+
+  return (
+    <div>
+      <PageHeader theme="sky" title="醫療安全評核" subtitle={`${branch} · ${nurse} · ${month}`} onBack={onBack}
+        right={<div className="flex items-center gap-2"><SaveBadge state={saveState} />{!editable && <Btn variant="amber" small onClick={unlock}>🔓 護理長解鎖</Btn>}</div>} />
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <Card className="p-4 mb-5 flex items-center justify-between flex-wrap gap-3">
+          <div className="text-sm font-bold text-slate-700">作答進度：<span className="text-sky-700">{answered}</span> / {SAFETY_TOTAL}</div>
+          <div className="flex gap-3 text-xs font-bold">
+            <span className="text-red-600">紅字不合格 {b.redFail}</span>
+            <span className="text-slate-600">黑字不合格 {b.blackFail}</span>
+            {rec.isSafetyComplete && <span className="text-amber-600">獎金 ${b.safetyBonus}</span>}
+          </div>
+        </Card>
+
+        <div className="flex gap-2 mb-5 flex-wrap">
+          {SAFETY_SECTIONS.map((sec, i) => (
+            <button key={sec.id} onClick={() => setActiveSec(i)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${activeSec === i ? "bg-sky-700 text-white border-sky-700" : "bg-white text-slate-600 border-slate-200"}`}>{sec.title.split(".")[0]}</button>
+          ))}
+        </div>
+
+        <h2 className="font-bold text-slate-800 mb-3">{SAFETY_SECTIONS[activeSec].title}</h2>
+        {SAFETY_SECTIONS[activeSec].categories.map(cat => (
+          <div key={cat.title} className="mb-5">
+            <div className="flex items-center justify-between gap-2 bg-sky-50 border border-sky-100 rounded-lg px-3 py-2 mb-2">
+              <div className="text-sm font-bold text-sky-800">{cat.title}</div>
+              <button disabled={!editable} onClick={() => passAllCategory(cat)}
+                className="shrink-0 text-xs font-bold px-2.5 py-1 rounded-lg border transition-colors bg-white border-sky-300 text-sky-700 hover:bg-sky-100 disabled:border-slate-200 disabled:text-slate-300">
+                ✓✓ 本項全部合格
+              </button>
+            </div>
+            <div className="space-y-2">
+              {cat.items.map(item => {
+                const st = rec.safetyData[item.id];
+                return (
+                  <Card key={item.id} className="p-3">
+                    <div className={`text-sm mb-2 leading-relaxed ${item.isRed ? "text-red-600 font-bold" : "text-slate-700"}`}>{item.isRed ? "🔴 " : ""}{item.text}</div>
+                    <div className="flex gap-2">
+                      <button disabled={!editable} onClick={() => setItem(item.id, "pass")} className={`flex-1 py-2 rounded-lg font-bold border-2 text-xs transition-colors ${st === "pass" ? "bg-sky-50 border-sky-500 text-sky-700" : "bg-white border-slate-200 text-slate-400"}`}>✓ 合格</button>
+                      <button disabled={!editable} onClick={() => setItem(item.id, "fail")} className={`flex-1 py-2 rounded-lg font-bold border-2 text-xs transition-colors ${st === "fail" ? "bg-red-50 border-red-500 text-red-600" : "bg-white border-slate-200 text-slate-400"}`}>✗ 不合格</button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <Card className="p-5 mb-6">
+          <Field label="護理長稽核姓名">
+            <input value={rec.safetySignatures.headNurseName} disabled={!editable} onChange={e => setRec({ ...rec, safetySignatures: { ...rec.safetySignatures, headNurseName: e.target.value } })} onBlur={() => persist(rec)}
+              className="w-full border border-slate-300 p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-500 disabled:bg-slate-50" placeholder="請輸入護理長姓名" />
+          </Field>
+          <div className="flex gap-3 mt-4">
+            <Btn variant="amber" className="flex-1" disabled={!editable} onClick={saveDraft}>💾 暫存草稿（{answered}/{SAFETY_TOTAL}）</Btn>
+            <Btn variant="sky" className="flex-1" disabled={!editable} onClick={submit}>送出安全稽核（{answered}/{SAFETY_TOTAL}）</Btn>
+          </div>
+          <div className="text-xs text-slate-400 mt-2 text-center">未評完可先暫存，下次回來從中斷處繼續；送出時才會檢查是否全數作答。</div>
+        </Card>
+        <div className="text-xs text-slate-400 text-center pb-6">獎金規則：紅字不合格 &gt; 0 → $0（一票否決）　·　紅字 0 且黑字 0 → $3,000　·　黑字 1–5 → $1,500　·　黑字 &gt; 5 → $0</div>
+      </div>
+      <button onClick={() => { try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) { window.scrollTo(0, 0); } }}
+        className="fixed bottom-6 right-6 bg-sky-700 text-white w-12 h-12 rounded-full shadow-lg font-bold text-lg hover:bg-sky-600 transition-colors z-40" title="回到最上方">↑</button>
+    </div>
+  );
+}
+
+function NursingDashboard({ nav, onBack }) {
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const out = {};
+    await Promise.all(NURSING_BRANCHES.map(async branch => {
+      const list = (nav.rosters.nursing[branch] || []).filter(n => n.active);
+      out[branch] = await Promise.all(list.map(async n => ({ name: n.name, rec: await SGET(nKey(month, branch, n.name)) })));
+    }));
+    setData(out); setLoading(false);
+  }, [month, nav.rosters]);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      <PageHeader theme="sky" title="護理部評核進度" onBack={onBack} right={<Btn variant="amber" small onClick={load}>🔄 重新整理</Btn>} />
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mb-4 max-w-xs"><Field label="月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field></div>
+        {loading || !data ? <Spinner /> : (
+          <div className="space-y-4">
+            {NURSING_BRANCHES.map(branch => (
+              <Card key={branch} className="p-4">
+                <h3 className="font-bold text-sky-800 mb-3">{branch}</h3>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {(data[branch] || []).map(({ name, rec }) => {
+                    const b = calcNursingBonus(rec);
+                    return (
+                      <div key={name} className="border border-slate-200 rounded-xl p-3 text-sm">
+                        <div className="font-bold text-slate-800 mb-1.5">{name}</div>
+                        <div className="flex gap-1.5 flex-wrap text-xs">
+                          <span className={`px-2 py-0.5 rounded-full font-bold ${rec?.isServiceComplete ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-400"}`}>服務品質{rec?.isServiceComplete ? " ✓" : " 未完成"}</span>
+                          <span className={`px-2 py-0.5 rounded-full font-bold ${rec?.isSafetyComplete ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-400"}`}>醫療安全{rec?.isSafetyComplete ? " ✓" : " 未完成"}</span>
+                          {rec?.isServiceComplete && rec?.isSafetyComplete && <span className="px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-700">${b.total}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NursingReport({ nav, onBack }) {
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [authed, setAuthed] = useState(nav.role === "superadmin" || nav.role === "hr");
+
+  useEffect(() => {
+    if (!authed) nav.askPassword("報表檢視驗證（總管或人資密碼）", "superadmin_or_hr", (r) => { nav.setRole(r); setAuthed(true); });
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!authed) return;
+    setLoading(true);
+    const rows = [];
+    await Promise.all(NURSING_BRANCHES.map(async branch => {
+      const list = (nav.rosters.nursing[branch] || []).filter(n => n.active);
+      await Promise.all(list.map(async n => {
+        const rec = await SGET(nKey(month, branch, n.name));
+        const b = calcNursingBonus(rec);
+        rows.push({ branch, name: n.name, rec, ...b, done: rec?.isServiceComplete && rec?.isSafetyComplete });
+      }));
+    }));
+    rows.sort((a, b) => NURSING_BRANCHES.indexOf(a.branch) - NURSING_BRANCHES.indexOf(b.branch));
+    setData(rows); setLoading(false);
+  }, [month, authed, nav.rosters]);
+  useEffect(() => { load(); }, [load]);
+
+  const exportExcel = () => {
+    if (!data) return;
+    const aoa = [["分院", "護理師", "服務品質狀態", "核決分數", "服務品質獎金", "醫療安全狀態", "紅字不合格", "黑字不合格", "醫療安全獎金", "達成總獎金(NT$)"]];
+    data.forEach(r => aoa.push([r.branch, r.name, r.rec?.isServiceComplete ? "完成" : "未完成", r.rec?.isServiceComplete ? r.serviceScore : "-", r.serviceBonus, r.rec?.isSafetyComplete ? "完成" : "未完成", r.redFail, r.blackFail, r.safetyBonus, r.done ? r.total : 0]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, month);
+    XLSX.writeFile(wb, `護理部評核獎金_${month}.xlsx`);
+  };
+
+  const exportImage = () => {
+    if (!data) return;
+    exportPNG(`護理部獎金結算報表_${month}`, [{
+      headers: ["分院", "護理師", "服務品質", "核決分數", "品質獎金", "醫療安全", "紅字", "黑字", "安全獎金", "總獎金"],
+      weights: [1.2, 1.2, 1, 1, 1, 1, 0.7, 0.7, 1, 1],
+      rows: data.map(r => [r.branch, r.name, r.rec?.isServiceComplete ? "✓ 完成" : "未完成", r.rec?.isServiceComplete ? `${r.serviceScore}/10` : "-", `$${r.serviceBonus}`, r.rec?.isSafetyComplete ? "✓ 完成" : "未完成", r.redFail, r.blackFail, `$${r.safetyBonus}`, `$${r.done ? r.total : 0}`])
+    }]);
+  };
+
+  if (!authed) return <div><PageHeader theme="sky" title="護理部獎金結算報表" onBack={onBack} /><div className="text-center py-16 text-slate-400">等待密碼驗證…</div></div>;
+
+  return (
+    <div>
+      <PageHeader theme="sky" title="護理部獎金結算報表" subtitle={nav.role === "hr" ? "人資唯讀模式" : "總管模式"} onBack={onBack}
+        right={<div className="flex gap-2 flex-wrap"><Btn variant="amber" small onClick={load}>🔄 重新整理</Btn><Btn variant="secondary" small onClick={exportImage}>📷 截圖轉存</Btn><Btn variant="sky" small onClick={exportExcel}>⬇ Excel</Btn></div>} />
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mb-4 max-w-xs"><Field label="月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field></div>
+        {loading || !data ? <Spinner /> : (
+          <Card className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-slate-50 text-slate-500 text-xs border-b border-slate-200">
+                <th className="p-3 text-left">分院</th><th className="p-3 text-left">護理師</th>
+                <th className="p-3 text-center">服務品質</th><th className="p-3 text-center">核決分數</th><th className="p-3 text-right">品質獎金</th>
+                <th className="p-3 text-center">醫療安全</th><th className="p-3 text-center">紅/黑不合格</th><th className="p-3 text-right">安全獎金</th>
+                <th className="p-3 text-right">總獎金</th>
+              </tr></thead>
+              <tbody>
+                {data.map((r, i) => (
+                  <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="p-3 font-bold text-slate-700">{r.branch}</td>
+                    <td className="p-3 text-slate-800">{r.name}</td>
+                    <td className="p-3 text-center">{r.rec?.isServiceComplete ? <span className="text-sky-700 font-bold">✓</span> : <span className="text-slate-300">—</span>}</td>
+                    <td className="p-3 text-center font-bold text-sky-700">{r.rec?.isServiceComplete ? `${r.serviceScore}/10` : "-"}</td>
+                    <td className="p-3 text-right">${r.serviceBonus}</td>
+                    <td className="p-3 text-center">{r.rec?.isSafetyComplete ? <span className="text-sky-700 font-bold">✓</span> : <span className="text-slate-300">—</span>}</td>
+                    <td className="p-3 text-center"><span className="text-red-600 font-bold">{r.redFail}</span> / {r.blackFail}</td>
+                    <td className="p-3 text-right">${r.safetyBonus}</td>
+                    <td className="p-3 text-right font-bold text-amber-600">${r.done ? r.total : 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============ 櫃台部（獨立事業體 · 品牌分層） ============ */
+const cKey = (month, brand, branch, staff, evaluator) => `counter_assessments:${month}:${brand}:${branch}:${staff}:${evaluator}`;
+const cPrefix = (month, brand, branch) => `counter_assessments:${month}:${brand}:${branch}:`;
+const directorTitleOf = (brand) => brand === "美加" ? "行政主任" : "客服主任";
+
+const loadBranchCounterEvals = async (month, brand, branch) => {
+  const keys = await SLIST(cPrefix(month, brand, branch));
+  const results = await Promise.all(keys.map(async k => {
+    const v = await SGET(k);
+    const parts = k.split(":");
+    return v ? { staff: parts[4], evaluator: parts[5], rec: v } : null;
+  }));
+  return results.filter(Boolean);
+};
+
+const summarizeCounterStaff = (evals, staff) => {
+  const done = evals.filter(e => e.staff === staff && e.rec.isComplete);
+  if (done.length === 0) return { evalCount: 0, avg: null, bonus: 0, evals: [] };
+  const avgs = done.map(e => singleEvalAvg(e.rec));
+  const avg = round1(avgs.reduce((a, b) => a + b, 0) / done.length);
+  return { evalCount: done.length, avg, bonus: calcCounterBonus(avg), evals: done.map(e => ({ name: e.evaluator, title: e.rec.evaluatorTitle, score: round1(singleEvalAvg(e.rec)), feedback: e.rec.feedback })) };
+};
+
+const isBranchUnlocked = (nav, month, brand, branch, evals) => {
+  if (nav.role === "superadmin") return true;
+  if (nav.dashStatus[`${month}:${brand}:${branch}`]) return true;
+  const bd = nav.rosters.counter[brand]?.[branch];
+  if (!bd) return false;
+  const activeEvaluators = bd.evaluators.filter(e => e.active).map(e => e.name);
+  const activeEvaluatees = bd.evaluatees.filter(e => e.active).map(e => e.name);
+  if (activeEvaluators.length === 0 || activeEvaluatees.length === 0) return false;
+  return activeEvaluatees.every(staff => activeEvaluators.every(ev => evals.some(x => x.staff === staff && x.evaluator === ev && x.rec.isComplete)));
+};
+
+function CounterSystem({ nav }) {
+  const [brand, setBrand] = useState(""); // 品牌分層：先選品牌
+  const [sub, setSub] = useState("menu");
+  const [branch, setBranch] = useState("");
+  const [evaluator, setEvaluator] = useState("");
+  const [staff, setStaff] = useState("");
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [record, setRecord] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const branchData = brand && branch ? nav.rosters.counter[brand]?.[branch] : null;
+  const evaluators = branchData ? branchData.evaluators.filter(e => e.active) : [];
+  const evaluatees = branchData ? branchData.evaluatees.filter(e => e.active).map(e => e.name) : [];
+  const evObj = evaluators.find(e => e.name === evaluator);
+
+  const openForm = async () => {
+    if (!branch || !evaluator || !staff || !month) { nav.showMsg("請完成選擇", "請依序選擇分院、評核人、受評者與月份。"); return; }
+    setLoading(true);
+    const rec = (await SGET(cKey(month, brand, branch, staff, evaluator))) || { ...getEmptyCounterEval(), evaluatorName: evaluator, evaluatorTitle: evObj?.title || "" };
+    setRecord(rec); setSub("form"); setLoading(false);
+  };
+
+  /* 品牌選擇層 */
+  if (!brand) return (
+    <div>
+      <PageHeader title="櫃台客服評核系統" subtitle="請先選擇品牌 · 兩品牌獨立作業"
+        onBack={nav.locked ? null : () => nav.setView("portal")}
+        right={nav.locked ? <span className="text-xs bg-white/15 px-3 py-1.5 rounded-full font-bold">評核者專用通道</span> : null} />
+      <div className="max-w-3xl mx-auto px-4 py-14">
+        <div className="grid sm:grid-cols-2 gap-6">
+          <Card className="p-10 text-center hover:shadow-md transition-shadow">
+            <div className="text-teal-700 mb-4"><IconCounter /></div>
+            <h2 className="text-2xl font-bold text-teal-800 mb-2">美加</h2>
+            <p className="text-xs text-slate-500 mb-6">台北仁愛 · 桃園中正 · 新竹光明<br />台中向上 · 台中崇德 · 高雄巨蛋</p>
+            <Btn className="w-full" onClick={() => setBrand("美加")}>進入美加評核區</Btn>
+          </Card>
+          <Card className="p-10 text-center hover:shadow-md transition-shadow">
+            <div className="text-teal-700 mb-4"><IconCounter /></div>
+            <h2 className="text-2xl font-bold text-teal-800 mb-2">康博</h2>
+            <p className="text-xs text-slate-500 mb-6">台北大安 · 桃園藝文 · 新竹竹北<br />台中惠文 · 台中北屯 · 台南安平</p>
+            <Btn className="w-full" onClick={() => setBrand("康博")}>進入康博評核區</Btn>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (sub === "form") return <CounterForm nav={nav} brand={brand} branch={branch} staff={staff} evaluator={evaluator} evaluatorTitle={evObj?.title || ""} month={month} initial={record} onBack={() => setSub("select")} />;
+  if (sub === "dashboard") return <CounterDashboard nav={nav} brand={brand} onBack={() => setSub("menu")} />;
+  if (sub === "report") return <CounterReport nav={nav} brand={brand} onBack={() => setSub("menu")} />;
+
+  if (sub === "select") return (
+    <div>
+      <PageHeader title={`${brand} 櫃台評核作業`} onBack={() => setSub("menu")} />
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <Card className="p-6 mb-6">
+          <div className="grid sm:grid-cols-2 gap-4">
+            <Field label="分院"><Sel value={branch} onChange={v => { setBranch(v); setEvaluator(""); setStaff(""); }} options={COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b])} placeholder="選擇分院" /></Field>
+            <Field label="評核月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field>
+            <Field label="評核人（主管本人）"><Sel value={evaluator} onChange={setEvaluator} options={evaluators.map(e => e.name)} placeholder="選擇評核人" /></Field>
+            <Field label="受評者（櫃台夥伴）"><Sel value={staff} onChange={setStaff} options={evaluatees} placeholder="選擇受評者" /></Field>
+          </div>
+          {evObj && <div className="mt-3 text-xs text-teal-700 font-bold">評核人職稱：{evObj.title}</div>}
+        </Card>
+        {loading ? <Spinner /> : <Btn className="w-full" onClick={openForm} disabled={!staff || !evaluator}>開始評核</Btn>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <PageHeader title={`${brand} 櫃台客服評核`} subtitle="獨立作業區"
+        onBack={() => setBrand("")}
+        right={nav.locked ? <span className="text-xs bg-white/15 px-3 py-1.5 rounded-full font-bold">評核者專用通道</span> : null} />
+      <div className="max-w-4xl mx-auto px-4 py-10">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <MenuTile icon={<IconForm />} title="評核作業" desc={`${brand}主管填寫夥伴評核表`} onClick={() => setSub("select")} />
+          <MenuTile icon={<IconDash />} title="評核進度" desc={`${brand}各分院受評狀態`} onClick={() => setSub("dashboard")} />
+          <MenuTile icon={<IconReport />} title="獎金結算報表" desc="總管 / 人資密碼檢視" onClick={() => setSub("report")} />
+          <MenuTile icon={<IconLink />} title="複製評核連結" desc="分享給評核者的專屬入口" onClick={() => nav.shareLink("counter")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CounterForm({ nav, brand, branch, staff, evaluator, evaluatorTitle, month, initial, onBack }) {
+  const [rec, setRec] = useState({ ...initial, evaluatorName: evaluator, evaluatorTitle });
+  const [saveState, setSaveState] = useState(null);
+
+  const persist = async (newRec) => {
+    setRec(newRec); setSaveState("saving");
+    const ok = await SSET(cKey(month, brand, branch, staff, evaluator), newRec);
+    setSaveState(ok ? "saved" : "error");
+  };
+
+  const setScore = (qid, val) => persist({ ...rec, scores: { ...rec.scores, [qid]: val } });
+  const scoredCount = COUNTER_QUESTIONS.filter(q => q.type === "score" && rec.scores?.[q.id]).length;
+  const avg = scoredCount === 5 ? round1(singleEvalAvg(rec)) : null;
+
+  const submit = () => {
+    if (scoredCount < 5) { nav.showMsg("尚未完成", `目前已評 ${scoredCount}/5 題計分項，請全部給分後再送出。`); return; }
+    const newRec = { ...rec, isComplete: true, evaluateDate: todayStr() };
+    persist(newRec);
+    nav.showMsg("評核已送出", `${staff} 的本張評核表平均分數：${round1(singleEvalAvg(newRec))} 分\n已即時儲存至雲端，其他主管的評核將自動彙整。`);
+  };
+
+  return (
+    <div>
+      <PageHeader title={`${brand} 櫃台客服評核`} subtitle={`${branch} · 受評者：${staff} · ${month}`} onBack={onBack} right={<SaveBadge state={saveState} />} />
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <Card className="p-4 mb-5 flex items-center justify-between flex-wrap gap-2">
+          <div className="text-sm text-slate-600">評核人：<b className="text-slate-800">{evaluatorTitle} {evaluator}</b></div>
+          <div className="text-sm font-bold text-teal-700">{scoredCount}/5 題完成{avg !== null ? ` · 平均 ${avg} 分` : ""}{rec.isComplete ? " · ✓ 已送出" : ""}</div>
+        </Card>
+
+        <div className="space-y-4 mb-6">
+          {COUNTER_QUESTIONS.map(q => (
+            <Card key={q.id} className="p-4">
+              <div className="font-bold text-slate-800 mb-1">{q.title}</div>
+              <div className="text-xs text-slate-500 mb-3 leading-relaxed">{q.desc}</div>
+              {q.type === "score" ? (
+                <div className="space-y-1.5">
+                  {[5, 4, 3, 2, 1].map(s => (
+                    <button key={s} onClick={() => setScore(q.id, s)}
+                      className={`w-full text-left p-2.5 rounded-lg border-2 transition-colors flex gap-2 items-start ${rec.scores?.[q.id] === s ? "bg-teal-50 border-teal-500" : "bg-white border-slate-200 hover:border-slate-300"}`}>
+                      <span className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${rec.scores?.[q.id] === s ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-500"}`}>{s}</span>
+                      <span className="text-xs text-slate-600 leading-relaxed pt-1">{q.scores[s]}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <textarea value={rec.feedback || ""} onChange={e => setRec({ ...rec, feedback: e.target.value })} onBlur={() => persist(rec)} rows={4}
+                  className="w-full border border-slate-300 p-3 rounded-lg text-sm outline-none focus:ring-2 focus:ring-teal-500" placeholder="請填寫具體表現回饋與建議…" />
+              )}
+            </Card>
+          ))}
+        </div>
+
+        <Btn className="w-full mb-4" onClick={submit}>送出評核表（{scoredCount}/5）</Btn>
+        <div className="text-xs text-slate-400 text-center pb-6">個人獎金：平均 5.0 → $3,000　·　4.0–4.9 → $2,000　·　3.0–3.9 → $1,000　·　&lt;3.0 → $0</div>
+      </div>
+    </div>
+  );
+}
+
+function CounterDashboard({ nav, brand, onBack }) {
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const out = {};
+    await Promise.all(COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b]).map(async branch => {
+      out[branch] = await loadBranchCounterEvals(month, brand, branch);
+    }));
+    setData(out); setLoading(false);
+  }, [month, brand, nav.rosters]);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      <PageHeader title={`${brand} 評核進度`} onBack={onBack} right={<Btn variant="amber" small onClick={load}>🔄 重新整理</Btn>} />
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mb-4 max-w-xs"><Field label="月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field></div>
+        {loading || !data ? <Spinner /> : (
+          <div className="space-y-4">
+            {COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b]).map(branch => {
+              const evals = data[branch] || [];
+              const bd = nav.rosters.counter[brand][branch];
+              const unlocked = isBranchUnlocked(nav, month, brand, branch, evals);
+              const activeEvCount = bd.evaluators.filter(e => e.active).length;
+              return (
+                <Card key={branch} className="p-4">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="font-bold text-teal-800">{branch}</h3>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${unlocked ? "bg-teal-100 text-teal-700" : "bg-orange-100 text-orange-600"}`}>{unlocked ? "🔓 報表已開放" : "🔒 評核中（成績保密）"}</span>
+                  </div>
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {bd.evaluatees.filter(e => e.active).map(e => {
+                      const sum = summarizeCounterStaff(evals, e.name);
+                      return (
+                        <div key={e.name} className="border border-slate-200 rounded-xl p-3 text-sm">
+                          <div className="font-bold text-slate-800 mb-1.5">{e.name}</div>
+                          <div className="flex gap-1.5 flex-wrap text-xs items-center">
+                            <span className={`px-2 py-0.5 rounded-full font-bold ${sum.evalCount >= activeEvCount ? "bg-teal-100 text-teal-700" : "bg-orange-100 text-orange-600"}`}>{sum.evalCount}/{activeEvCount} 位主管已評</span>
+                            {unlocked && sum.avg !== null && <span className="px-2 py-0.5 rounded-full font-bold bg-sky-100 text-sky-700">平均 {sum.avg}</span>}
+                            {unlocked && sum.avg !== null && <span className="px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-700">${sum.bonus}</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CounterReport({ nav, brand, onBack }) {
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [authed, setAuthed] = useState(nav.role === "superadmin" || nav.role === "hr");
+  const dTitle = directorTitleOf(brand);
+
+  useEffect(() => {
+    if (!authed) nav.askPassword("報表檢視驗證（總管或人資密碼）", "superadmin_or_hr", (r) => { nav.setRole(r); setAuthed(true); });
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!authed) return;
+    setLoading(true);
+    const out = [];
+    for (const branch of COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b])) {
+      const bd = nav.rosters.counter[brand][branch];
+      const evals = await loadBranchCounterEvals(month, brand, branch);
+      const unlocked = isBranchUnlocked(nav, month, brand, branch, evals);
+      const staffRows = bd.evaluatees.filter(e => e.active).map(e => ({ staff: e.name, ...summarizeCounterStaff(evals, e.name) }));
+      const doneAvgs = staffRows.filter(r => r.avg !== null).map(r => r.avg);
+      const storeAvg = doneAvgs.length ? round1(doneAvgs.reduce((a, b) => a + b, 0) / doneAvgs.length) : null;
+      const director = bd.director?.active && bd.director?.name ? { name: bd.director.name, avg: storeAvg, bonus: storeAvg !== null ? calcDirectorBonus(storeAvg) : 0 } : null;
+      out.push({ branch, unlocked, staffRows, storeAvg, director, activeEvCount: bd.evaluators.filter(x => x.active).length });
+    }
+    setData(out); setLoading(false);
+  }, [month, brand, authed, nav.rosters, nav.dashStatus, nav.role]);
+  useEffect(() => { load(); }, [load]);
+
+  const exportExcel = () => {
+    if (!data) return;
+    const aoa = [["分院", "受評者", "已評主管數", "各主管評分", "最終平均", "個人獎金", "店平均", dTitle, `${dTitle}獎金`]];
+    data.forEach(b => {
+      b.staffRows.forEach(r => {
+        aoa.push([b.branch, r.staff, r.evalCount, r.evals.map(e => `${e.name}:${e.score}`).join("、"), r.avg ?? "-", b.unlocked && r.avg !== null ? r.bonus : "-", b.storeAvg ?? "-", b.director?.name || "-", b.director && b.unlocked ? b.director.bonus : "-"]);
+      });
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `${brand}_${month}`);
+    XLSX.writeFile(wb, `櫃台客服獎金_${brand}_${month}.xlsx`);
+  };
+
+  const exportImage = () => {
+    if (!data) return;
+    const sections = data.map(b => ({
+      heading: `${b.branch}${b.storeAvg !== null && b.unlocked ? `　店平均 ${b.storeAvg}` : ""}${b.director && b.unlocked ? `　${dTitle} ${b.director.name} $${b.director.bonus}` : ""}${b.unlocked ? "" : "　🔒 評核中"}`,
+      headers: ["受評者", "已評主管", "各主管評分", "最終平均", "個人獎金"],
+      weights: [1.2, 0.9, 3, 1, 1],
+      rows: b.unlocked
+        ? b.staffRows.map(r => [r.staff, `${r.evalCount}/${b.activeEvCount}`, r.evals.map(e => `${e.title} ${e.name}：${e.score}`).join("　"), r.avg ?? "-", r.avg !== null ? `$${r.bonus}` : "-"])
+        : [["（評核中，成績保密）", "-", "-", "-", "-"]]
+    }));
+    exportPNG(`櫃台客服獎金結算_${brand}_${month}`, sections);
+  };
+
+  if (!authed) return <div><PageHeader title={`${brand} 獎金結算報表`} onBack={onBack} /><div className="text-center py-16 text-slate-400">等待密碼驗證…</div></div>;
+
+  return (
+    <div>
+      <PageHeader title={`${brand} 獎金結算報表`} subtitle={nav.role === "hr" ? "人資唯讀模式" : "總管模式"} onBack={onBack}
+        right={<div className="flex gap-2 flex-wrap"><Btn variant="amber" small onClick={load}>🔄 重新整理</Btn><Btn variant="secondary" small onClick={exportImage}>📷 截圖轉存</Btn><Btn variant="sky" small onClick={exportExcel}>⬇ Excel</Btn></div>} />
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mb-4 max-w-xs"><Field label="月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field></div>
+        {loading || !data ? <Spinner /> : data.map(b => (
+          <Card key={b.branch} className="mb-4 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 flex-wrap gap-2">
+              <h3 className="font-bold text-teal-800">{b.branch}</h3>
+              <div className="flex gap-2 items-center text-xs font-bold">
+                {b.storeAvg !== null && b.unlocked && <span className="bg-sky-100 text-sky-700 px-2.5 py-1 rounded-full">店平均 {b.storeAvg}</span>}
+                {b.director && b.unlocked && <span className="bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full">{dTitle} {b.director.name} ${b.director.bonus}</span>}
+                <span className={`px-2.5 py-1 rounded-full ${b.unlocked ? "bg-teal-100 text-teal-700" : "bg-orange-100 text-orange-600"}`}>{b.unlocked ? "🔓 已開放" : "🔒 評核中"}</span>
+              </div>
+            </div>
+            {b.unlocked ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-slate-500 text-xs border-b border-slate-100">
+                    <th className="p-3 text-left">受評者</th><th className="p-3 text-center">已評主管</th><th className="p-3 text-left">各主管評分</th><th className="p-3 text-center">最終平均</th><th className="p-3 text-right">個人獎金</th>
+                  </tr></thead>
+                  <tbody>
+                    {b.staffRows.map(r => (
+                      <tr key={r.staff} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="p-3 font-bold text-slate-800">{r.staff}</td>
+                        <td className="p-3 text-center">{r.evalCount}/{b.activeEvCount}</td>
+                        <td className="p-3 text-xs text-slate-500">{r.evals.map(e => `${e.title} ${e.name}：${e.score}`).join("　·　") || "—"}</td>
+                        <td className="p-3 text-center font-bold text-sky-700">{r.avg ?? "-"}</td>
+                        <td className="p-3 text-right font-bold text-amber-600">{r.avg !== null ? `$${r.bonus}` : "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-6 text-center text-sm text-slate-400">此分院尚未全數完成評核，成績保密中。總管可於後台強制開放。</div>
+            )}
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============ 總管理後台 ============ */
+const TITLE_OPTIONS = { "美加": ["店經理", "店副理", "護理長", "行政主任"], "康博": ["店經理", "店副理", "護理長", "客服主任"] };
+const DIRECTOR_TITLES = ["行政主任", "客服主任"];
+
+function Admin({ nav }) {
+  const [tab, setTab] = useState("roster");
+  const [rosterTab, setRosterTab] = useState("nursing");
+  const [editPw, setEditPw] = useState(nav.passwords);
+  const [pwVisible, setPwVisible] = useState({ superadmin: true, hr: true, manager: true, storeManager: true, safetyUnlock: true });
+  const [month, setMonth] = useState(DEFAULT_MONTH);
+  const [saveState, setSaveState] = useState(null);
+  const [newNames, setNewNames] = useState({});
+  const [newTitles, setNewTitles] = useState({});
+  const [dataMarks, setDataMarks] = useState(null); // 資料存在標記
+
+  const saveRosters = async (newRosters) => {
+    nav.setRosters(newRosters); setSaveState("saving");
+    const ok = await SSET("cfg:rosters", newRosters);
+    setSaveState(ok ? "saved" : "error");
+  };
+  const savePasswords = async () => {
+    nav.setPasswords(editPw); setSaveState("saving");
+    const ok = await SSET("cfg:passwords", editPw);
+    setSaveState(ok ? "saved" : "error");
+    if (ok) nav.showMsg("已儲存", "密碼設定已更新並同步至雲端。");
+  };
+  const saveDash = async (ds) => {
+    nav.setDashStatus(ds); setSaveState("saving");
+    const ok = await SSET("cfg:dashstatus", ds);
+    setSaveState(ok ? "saved" : "error");
+  };
+  const toggleUnlock = (brand, branch) => {
+    const key = `${month}:${brand}:${branch}`;
+    saveDash({ ...nav.dashStatus, [key]: !nav.dashStatus[key] });
+  };
+  const brandUnlockAll = (brand, on) => {
+    const ds = { ...nav.dashStatus };
+    COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b]).forEach(branch => { ds[`${month}:${brand}:${branch}`] = on; });
+    saveDash(ds);
+    nav.showMsg(on ? "已全部開放" : "已全部關閉", `${brand} 全分院 ${month} 報表已${on ? "強制開放" : "改回自動判定"}。`);
+  };
+
+  const toggleNurse = (branch, idx) => {
+    const r = JSON.parse(JSON.stringify(nav.rosters));
+    r.nursing[branch][idx].active = !r.nursing[branch][idx].active;
+    saveRosters(r);
+  };
+  const addNurse = (branch) => {
+    const name = (newNames[`n-${branch}`] || "").trim();
+    if (!name) return;
+    const r = JSON.parse(JSON.stringify(nav.rosters));
+    r.nursing[branch].push({ name, active: true });
+    saveRosters(r); setNewNames({ ...newNames, [`n-${branch}`]: "" });
+  };
+  const toggleCounterPerson = (brand, branch, listKey, idx) => {
+    const r = JSON.parse(JSON.stringify(nav.rosters));
+    r.counter[brand][branch][listKey][idx].active = !r.counter[brand][branch][listKey][idx].active;
+    saveRosters(r);
+  };
+  const addEvaluator = (brand, branch) => {
+    const nameKey = `c-${brand}-${branch}-evaluators`;
+    const name = (newNames[nameKey] || "").trim();
+    const title = newTitles[nameKey] || "";
+    if (!title) { nav.showMsg("請先選擇職稱", "新增評核人時必須先選擇職稱，再輸入姓名。"); return; }
+    if (!name) { nav.showMsg("請輸入姓名", "請輸入評核人姓名。"); return; }
+    const r = JSON.parse(JSON.stringify(nav.rosters));
+    r.counter[brand][branch].evaluators.push({ title, name, active: true });
+    if (DIRECTOR_TITLES.includes(title)) {
+      r.counter[brand][branch].director = { name, active: true };
+    }
+    saveRosters(r);
+    setNewNames({ ...newNames, [nameKey]: "" });
+    if (DIRECTOR_TITLES.includes(title)) nav.showMsg(`已同步設定${title}`, `${title} ${name} 已自動設定為本店的品牌主任職，其獎金將依「店平均分數」計算（${title}獎金公式）。`);
+  };
+  const addEvaluatee = (brand, branch) => {
+    const nameKey = `c-${brand}-${branch}-evaluatees`;
+    const name = (newNames[nameKey] || "").trim();
+    if (!name) return;
+    const r = JSON.parse(JSON.stringify(nav.rosters));
+    r.counter[brand][branch].evaluatees.push({ name, active: true });
+    saveRosters(r); setNewNames({ ...newNames, [nameKey]: "" });
+  };
+  const setDirector = (brand, branch, name) => {
+    const r = JSON.parse(JSON.stringify(nav.rosters));
+    r.counter[brand][branch].director = { name: name.trim(), active: !!name.trim() };
+    saveRosters(r);
+  };
+
+  /* 資料重置：載入存在標記 */
+  const loadDataMarks = useCallback(async () => {
+    setDataMarks(null);
+    const [nKeys, cKeys] = await Promise.all([SLIST(`assessments:${month}:`), SLIST(`counter_assessments:${month}:`)]);
+    setDataMarks({ nursing: new Set(nKeys), counter: new Set(cKeys) });
+  }, [month]);
+  useEffect(() => { if (tab === "reset") loadDataMarks(); }, [tab, loadDataMarks]);
+
+  const resetNurseForm = (branch, nurse) => {
+    nav.showConfirm("重置確認", `確定要清空 ${month} ${branch} ${nurse} 的護理評核資料嗎？此操作無法復原。`, async () => {
+      await SDEL(nKey(month, branch, nurse));
+      await loadDataMarks();
+      nav.showMsg("已重置", "該筆評核資料已從雲端刪除。");
+    });
+  };
+  const resetCounterStaff = (brand, branch, staff) => {
+    nav.showConfirm("重置確認", `確定要清空 ${month} ${brand} ${branch} ${staff} 的所有主管評核資料嗎？此操作無法復原。`, async () => {
+      const keys = await SLIST(`counter_assessments:${month}:${brand}:${branch}:${staff}:`);
+      await Promise.all(keys.map(k => SDEL(k)));
+      await loadDataMarks();
+      nav.showMsg("已重置", `已刪除 ${keys.length} 筆評核資料。`);
+    });
+  };
+
+  return (
+    <div>
+      <PageHeader title="總管理後台" subtitle="人員名單 · 密碼 · 報表解鎖 · 資料重置" onBack={() => { nav.setRole(null); nav.setView("portal"); }} right={<SaveBadge state={saveState} />} />
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <div className="flex gap-2 mb-6 flex-wrap">
+          {[["roster", "👥 人員名單"], ["password", "🔑 密碼設定"], ["unlock", "🔓 報表解鎖"], ["reset", "🗑 資料重置"]].map(([k, l]) => (
+            <Btn key={k} variant={tab === k ? "primary" : "secondary"} small onClick={() => setTab(k)}>{l}</Btn>
+          ))}
+        </div>
+
+        {tab === "roster" && (
+          <div>
+            <div className="flex gap-2 mb-4">
+              <Btn variant={rosterTab === "nursing" ? "sky" : "secondary"} small onClick={() => setRosterTab("nursing")}>護理部</Btn>
+              <Btn variant={rosterTab === "counter" ? "primary" : "secondary"} small onClick={() => setRosterTab("counter")}>櫃台部</Btn>
+            </div>
+            <div className="text-xs text-slate-400 mb-4">💡 人員離職請「停用」而非刪除，以保留歷史報表資料完整性。</div>
+            {rosterTab === "nursing" && NURSING_BRANCHES.map(branch => (
+              <Card key={branch} className="p-4 mb-3">
+                <h4 className="font-bold text-sky-800 mb-2">{branch}</h4>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {(nav.rosters.nursing[branch] || []).map((n, i) => (
+                    <button key={i} onClick={() => toggleNurse(branch, i)} className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${n.active ? "bg-teal-50 border-teal-300 text-teal-700" : "bg-slate-100 border-slate-200 text-slate-400 line-through"}`}>{n.name} {n.active ? "✓" : "✗"}</button>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input value={newNames[`n-${branch}`] || ""} onChange={e => setNewNames({ ...newNames, [`n-${branch}`]: e.target.value })} className="flex-1 border border-slate-300 p-2 rounded-lg text-sm outline-none" placeholder="新增護理師姓名" />
+                  <Btn small variant="sky" onClick={() => addNurse(branch)}>新增</Btn>
+                </div>
+              </Card>
+            ))}
+            {rosterTab === "counter" && COUNTER_BRANDS.map(brand => (
+              <div key={brand} className="mb-5">
+                <h3 className="font-bold text-slate-700 mb-2">🏷 {brand}</h3>
+                {COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b]).map(branch => {
+                  const bd = nav.rosters.counter[brand][branch];
+                  const evKey = `c-${brand}-${branch}-evaluators`;
+                  const eeKey = `c-${brand}-${branch}-evaluatees`;
+                  return (
+                    <Card key={branch} className="p-4 mb-3">
+                      <h4 className="font-bold text-teal-800 mb-2">{branch}</h4>
+                      <div className="text-xs font-bold text-slate-500 mb-1">評核人（主管）— 先選職稱，再輸入姓名</div>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {bd.evaluators.map((p, i) => (
+                          <button key={i} onClick={() => toggleCounterPerson(brand, branch, "evaluators", i)} className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${p.active ? "bg-sky-50 border-sky-300 text-sky-700" : "bg-slate-100 border-slate-200 text-slate-400 line-through"}`}>{p.title} {p.name} {p.active ? "✓" : "✗"}</button>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 mb-3 flex-wrap">
+                        <select value={newTitles[evKey] || ""} onChange={e => setNewTitles({ ...newTitles, [evKey]: e.target.value })} className="border border-slate-300 p-2 rounded-lg text-sm bg-white outline-none w-32">
+                          <option value="">選擇職稱</option>
+                          {TITLE_OPTIONS[brand].map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <input value={newNames[evKey] || ""} onChange={e => setNewNames({ ...newNames, [evKey]: e.target.value })} className="flex-1 min-w-[120px] border border-slate-300 p-2 rounded-lg text-sm outline-none" placeholder="評核人姓名" />
+                        <Btn small variant="sky" onClick={() => addEvaluator(brand, branch)}>新增</Btn>
+                      </div>
+                      {DIRECTOR_TITLES.some(t => TITLE_OPTIONS[brand].includes(t)) && (
+                        <div className="text-xs text-amber-600 mb-3">💡 新增「{brand === "美加" ? "行政主任" : "客服主任"}」時將自動設定為品牌主任職，獎金依店平均計算。</div>
+                      )}
+                      <div className="text-xs font-bold text-slate-500 mb-1">受評者（櫃台夥伴）</div>
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {bd.evaluatees.map((p, i) => (
+                          <button key={i} onClick={() => toggleCounterPerson(brand, branch, "evaluatees", i)} className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${p.active ? "bg-teal-50 border-teal-300 text-teal-700" : "bg-slate-100 border-slate-200 text-slate-400 line-through"}`}>{p.name} {p.active ? "✓" : "✗"}</button>
+                        ))}
+                      </div>
+                      <div className="flex gap-2 mb-3">
+                        <input value={newNames[eeKey] || ""} onChange={e => setNewNames({ ...newNames, [eeKey]: e.target.value })} className="flex-1 border border-slate-300 p-2 rounded-lg text-sm outline-none" placeholder="夥伴姓名" />
+                        <Btn small onClick={() => addEvaluatee(brand, branch)}>新增</Btn>
+                      </div>
+                      <div className="text-xs font-bold text-slate-500 mb-1">{brand === "美加" ? "行政主任" : "客服主任"}（依店平均計算主任獎金，留空代表無）</div>
+                      <input defaultValue={bd.director?.name || ""} onBlur={e => setDirector(brand, branch, e.target.value)} className="w-full border border-slate-300 p-2 rounded-lg text-sm outline-none" placeholder={`${brand === "美加" ? "行政主任" : "客服主任"}姓名`} />
+                    </Card>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === "password" && (
+          <Card className="p-6 max-w-lg space-y-4">
+            {[["superadmin", "👑 總管理密碼"], ["hr", "💼 人資唯讀密碼"], ["manager", "⚕ 主管密碼 (服務品質評核用)"], ["storeManager", "🏢 店經理密碼 (服務品質核決用)"], ["safetyUnlock", "🛡 護理長密碼 (醫療安全解鎖用)"]].map(([k, label]) => (
+              <div key={k}>
+                <label className="text-sm font-bold text-slate-600 block mb-1.5">{label}</label>
+                <div className="relative">
+                  <input type={pwVisible[k] ? "text" : "password"} value={editPw[k]} onChange={e => setEditPw({ ...editPw, [k]: e.target.value })} className="w-full border border-slate-300 p-3 pr-14 rounded-lg outline-none focus:ring-2 focus:ring-teal-500 bg-white" />
+                  <button onClick={() => setPwVisible({ ...pwVisible, [k]: !pwVisible[k] })} className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-slate-600">{pwVisible[k] ? "隱藏" : "顯示"}</button>
+                </div>
+              </div>
+            ))}
+            <Btn className="w-full" onClick={savePasswords}>儲存密碼設定</Btn>
+          </Card>
+        )}
+
+        {tab === "unlock" && (
+          <div>
+            <div className="max-w-xs mb-4"><Field label="月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field></div>
+            {COUNTER_BRANDS.map(brand => (
+              <Card key={brand} className="p-4 mb-3">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <h4 className="font-bold text-slate-700">{brand}</h4>
+                  <div className="flex gap-2">
+                    <Btn small variant="amber" onClick={() => brandUnlockAll(brand, true)}>🔓 本品牌全開</Btn>
+                    <Btn small variant="secondary" onClick={() => brandUnlockAll(brand, false)}>全部改回自動</Btn>
+                  </div>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b]).map(branch => {
+                    const on = !!nav.dashStatus[`${month}:${brand}:${branch}`];
+                    return (
+                      <button key={branch} onClick={() => toggleUnlock(brand, branch)} className={`flex items-center justify-between p-3 rounded-xl border-2 text-sm font-bold transition-colors ${on ? "bg-teal-50 border-teal-400 text-teal-700" : "bg-white border-slate-200 text-slate-500"}`}>
+                        <span>{branch}</span><span>{on ? "🔓 強制開放中" : "🔒 依自動判定"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Card>
+            ))}
+            <div className="text-xs text-slate-400">自動解鎖規則：該分院所有啟用中的評核人 × 受評者 全數完成評核後自動開放。此處可強制覆蓋。</div>
+          </div>
+        )}
+
+        {tab === "reset" && (
+          <div>
+            <div className="flex items-end gap-3 mb-4 flex-wrap">
+              <div className="max-w-xs flex-1"><Field label="月份"><Sel value={month} onChange={setMonth} options={MONTHS} /></Field></div>
+              <Btn small variant="amber" onClick={loadDataMarks}>🔄 重新掃描資料</Btn>
+            </div>
+            <div className="text-xs text-red-500 font-bold mb-2">⚠ 重置會永久刪除該人員該月份的評核資料，請謹慎操作。</div>
+            <div className="text-xs text-slate-500 mb-4">標記說明：<span className="font-bold text-teal-700">● 有資料</span>（可重置）　·　<span className="font-bold text-slate-400">○ 已清空</span>（無資料）</div>
+            {!dataMarks ? <Spinner text="掃描雲端資料中…" /> : (
+              <>
+                <h3 className="font-bold text-sky-800 mb-2 text-sm">護理部</h3>
+                {NURSING_BRANCHES.map(branch => (
+                  <Card key={branch} className="p-4 mb-3">
+                    <h4 className="font-bold text-sky-800 mb-2 text-sm">{branch}</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {(nav.rosters.nursing[branch] || []).filter(n => n.active).map(n => {
+                        const has = dataMarks.nursing.has(nKey(month, branch, n.name));
+                        return (
+                          <button key={n.name} onClick={() => has && resetNurseForm(branch, n.name)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${has ? "bg-red-50 border-red-300 text-red-600 hover:bg-red-100" : "bg-slate-50 border-slate-200 text-slate-400 cursor-default"}`}>
+                            {has ? "●" : "○"} {n.name}{has ? " 重置" : " 已清空"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Card>
+                ))}
+                <h3 className="font-bold text-teal-800 mb-2 text-sm mt-6">櫃台部</h3>
+                {COUNTER_BRANDS.map(brand => COUNTER_BRANCHES[brand].filter(b => nav.rosters.counter[brand]?.[b]).map(branch => {
+                  const bd = nav.rosters.counter[brand][branch];
+                  return (
+                    <Card key={`${brand}-${branch}`} className="p-4 mb-3">
+                      <h4 className="font-bold text-teal-800 mb-2 text-sm">{brand} · {branch}</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {bd.evaluatees.filter(e => e.active).map(e => {
+                          const prefix = `counter_assessments:${month}:${brand}:${branch}:${e.name}:`;
+                          const has = [...dataMarks.counter].some(k => k.startsWith(prefix));
+                          return (
+                            <button key={e.name} onClick={() => has && resetCounterStaff(brand, branch, e.name)}
+                              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${has ? "bg-red-50 border-red-300 text-red-600 hover:bg-red-100" : "bg-slate-50 border-slate-200 text-slate-400 cursor-default"}`}>
+                              {has ? "●" : "○"} {e.name}{has ? " 重置" : " 已清空"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  );
+                }))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
